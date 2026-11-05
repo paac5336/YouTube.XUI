@@ -31,8 +31,8 @@ O link do YouTube leva o IP do servidor que o pediu, por isso **o script tem de 
 
 ```bash
 cd /root
-# copia o install_ytlive.sh para aqui (WinSCP), ou descarrega-o:
-curl -fsSL -o install_ytlive.sh https://raw.githubusercontent.com/paac5336/YouTube.XUI/main/install_ytlive.sh
+# copia o install_ytlive.sh para aqui com o WinSCP
+# (o repositório é privado: o download direto por curl só funciona se o tornares público)
 
 head -1 install_ytlive.sh          # tem de mostrar: #!/bin/bash
 sed -i 's/\r$//' install_ytlive.sh
