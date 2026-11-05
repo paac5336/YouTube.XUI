@@ -1,0 +1,15 @@
+[Unit]
+Description=YouTube Live para XUI (ytlive)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/php -S 127.0.0.1:8088 -t /opt/ytlive
+Restart=always
+RestartSec=3
+Environment=PHP_CLI_SERVER_WORKERS=4
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
