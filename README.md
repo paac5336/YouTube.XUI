@@ -84,7 +84,48 @@ Em **Streams → Add Stream**:
 | Low Latency On-Demand (LLOD) | **desligado** |
 | On-Demand | opcional (desligado arranca mais depressa) |
 
-`ID_DO_CANAL` pode ser o ID `UCxxxxxxxxxxxxxxxxxxxxxx` ou o `@handle`. Usa `?c=` (canal) em vez de `?v=` (vídeo): quando o canal começa um direto novo, o link continua a funcionar.
+`ID_DO_CANAL` pode ser o ID `UCxxxxxxxxxxxxxxxxxxxxxx` ou o `@handle`.
+
+## 4. Escolher o direto: exemplos de URL
+
+Há três formas de dizer ao script que direto queres. Todas levam `&p=1` no fim quando são a fonte no XUI.
+
+| Situação | Fonte no XUI | O que acontece |
+| --- | --- | --- |
+| Canal com **um** direto de cada vez | `http://127.0.0.1:8088/ytlive.php?c=UCHdUmP7lMXJE9aUAtFQbJOg&p=1` | apanha o direto que o canal tiver ativo; se o direto for reiniciado com um ID novo, continua a funcionar |
+| O mesmo, pelo `@handle` | `http://127.0.0.1:8088/ytlive.php?c=@NomeDoCanal&p=1` | igual ao anterior |
+| Canal com **vários** diretos ao mesmo tempo | `http://127.0.0.1:8088/ytlive.php?c=@NomeDoCanal&t=Polo%20Norte&p=1` | escolhe, entre os diretos ativos, o que tem **todas** as palavras no título; continua a funcionar se esse direto for reiniciado com um ID novo |
+| Um direto **específico**, fixo | `http://127.0.0.1:8088/ytlive.php?v=guvwk0S17w4&p=1` | fica preso a esse vídeo; deixa de funcionar se o canal o terminar e abrir outro |
+
+Sem `&t=`, num canal com vários diretos, quem escolhe é o YouTube (normalmente o principal ou o mais recente), e a escolha pode mudar sem aviso.
+
+Regras do `&t=`:
+
+- todas as palavras têm de aparecer no título, em qualquer ordem;
+- maiúsculas e acentos não contam (`fabrica` encontra "Fábrica");
+- os espaços escrevem-se `%20` no URL (`t=Polo%20Norte`);
+- se várias transmissões servirem, fica a mais recente.
+
+Ver os diretos ativos de um canal (para escolher as palavras do `&t=`):
+
+```bash
+curl "http://127.0.0.1:8088/ytlive.php?c=@NomeDoCanal&list=1"
+```
+
+```
+2 direto(s) ativo(s):
+
+  1. guvwk0S17w4  🔴 Papai Noel ao Vivo 24h · Fábrica do Polo Norte
+  2. abcdEFGhijk  Casa do Pai Natal — câmara 2
+```
+
+Testar antes de pôr no XUI:
+
+```bash
+curl "http://127.0.0.1:8088/ytlive.php?c=@NomeDoCanal&t=Polo%20Norte&debug=1"
+```
+
+A resposta mostra `Video:` e `Titulo:` do direto escolhido. Se nenhum título servir, aparece a lista dos diretos ativos para corrigires as palavras.
 
 Exemplo testado: Pai Natal 24h → `c=UCHdUmP7lMXJE9aUAtFQbJOg`
 
@@ -94,6 +135,7 @@ Exemplo testado: Pai Natal 24h → `c=UCHdUmP7lMXJE9aUAtFQbJOg`
 | --- | --- | --- |
 | `Sem direto ativo` | o canal não está em direto, ou é um vídeo normal | esperar pelo direto; vídeos normais não funcionam |
 | `O canal não tem nenhum direto ativo` | canal offline | o stream volta sozinho quando o canal transmitir |
+| `Nenhum direto ativo do canal tem "..." no título` | as palavras do `&t=` não existem em nenhum título ativo | ver os títulos com `&list=1` e ajustar as palavras |
 | `O YouTube bloqueou o pedido` (503) | IP do servidor marcado pelo YouTube | não atribuir canais do YouTube a esse servidor |
 | `Playback on other websites has been disabled` | o dono bloqueou a reprodução fora do YouTube | já resolvido pelo script (yt-dlp com clientes web) |
 | `[LLOD] Source isn't MPEG-TS` nos logs do XUI | LLOD ligado no canal | desligar o LLOD nesse canal |

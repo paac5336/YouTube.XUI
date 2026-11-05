@@ -42,13 +42,18 @@ mkdir -p "$DIR"
 cat > "$DIR/ytlive.php" <<'PHPEOF'
 <?php
 /*
- * ytlive.php v2 — YouTube Live -> HLS (.m3u8) para XUI
+ * ytlive.php v3 — YouTube Live -> HLS (.m3u8) para XUI
  * CAOOSS.tv (baseado no script original de @BelAScripts)
  *
  * UTILIZAÇÃO (fonte do canal no XUI):
  *   Por vídeo:  http://127.0.0.1:8088/ytlive.php?v=guvwk0S17w4
  *   Por canal:  http://127.0.0.1:8088/ytlive.php?c=@handle
  *               http://127.0.0.1:8088/ytlive.php?c=UCxxxxxxxxxxxxxxxxxxxxxx
+ *   Canal com vários diretos — escolher pelo título (&t=palavras):
+ *               http://127.0.0.1:8088/ytlive.php?c=@handle&t=Fabrica
+ *               (todas as palavras têm de estar no título; maiúsculas e acentos não contam)
+ *   Ver os diretos ativos de um canal:
+ *               curl "http://127.0.0.1:8088/ytlive.php?c=@handle&list=1"
  *   Diagnóstico:
  *               curl "http://127.0.0.1:8088/ytlive.php?v=guvwk0S17w4&debug=1"
  *
@@ -163,6 +168,78 @@ function ytdlp(string $videoId, string &$err): ?string {
     return null;
 }
 
+// --- Texto normalizado (sem acentos, minúsculas) para comparar títulos ---
+function norm(string $s): string {
+    $map = ['á'=>'a','à'=>'a','â'=>'a','ã'=>'a','ä'=>'a','Á'=>'a','À'=>'a','Â'=>'a','Ã'=>'a','Ä'=>'a',
+            'é'=>'e','è'=>'e','ê'=>'e','ë'=>'e','É'=>'e','È'=>'e','Ê'=>'e','Ë'=>'e',
+            'í'=>'i','ì'=>'i','î'=>'i','ï'=>'i','Í'=>'i','Ì'=>'i','Î'=>'i','Ï'=>'i',
+            'ó'=>'o','ò'=>'o','ô'=>'o','õ'=>'o','ö'=>'o','Ó'=>'o','Ò'=>'o','Ô'=>'o','Õ'=>'o','Ö'=>'o',
+            'ú'=>'u','ù'=>'u','û'=>'u','ü'=>'u','Ú'=>'u','Ù'=>'u','Û'=>'u','Ü'=>'u',
+            'ç'=>'c','Ç'=>'c','ñ'=>'n','Ñ'=>'n'];
+    return strtolower(trim(preg_replace('/\s+/', ' ', strtr($s, $map))));
+}
+
+function title_matches(string $title, string $words): bool {
+    $t = norm($title);
+    foreach (explode(' ', norm($words)) as $w) {
+        if ($w !== '' && strpos($t, $w) === false) return false;
+    }
+    return true;
+}
+
+// --- Lista os diretos ATIVOS de um canal: [['id'=>..., 'title'=>...], ...] (mais recente primeiro) ---
+function list_lives(string $channelBase, array &$log): array {
+    $lives = [];
+    $html = http($channelBase . '/streams', 'GET', [
+        'User-Agent: ' . WEB_UA,
+        'Accept-Language: pt-PT,pt;q=0.9,en;q=0.8',
+        'Cookie: CONSENT=YES+cb; SOCS=CAI',
+    ]);
+    if ($html !== null && preg_match('/ytInitialData\s*=\s*(\{.+?\});\s*<\/script>/s', $html, $m)) {
+        $data = json_decode($m[1], true);
+        $seen = [];
+        $walk = function ($node) use (&$walk, &$lives, &$seen) {
+            if (!is_array($node)) return;
+            if (isset($node['videoRenderer']['videoId'])) {                     // formato clássico
+                $vr = $node['videoRenderer']; $enc = json_encode($vr);
+                $title = $vr['title']['simpleText'] ?? implode('', array_column($vr['title']['runs'] ?? [], 'text'));
+                $live = !isset($vr['upcomingEventData'])
+                     && (strpos($enc, 'LIVE_NOW') !== false || strpos($enc, '"style":"LIVE"') !== false);
+                if ($live && !isset($seen[$vr['videoId']])) { $seen[$vr['videoId']] = 1; $lives[] = ['id' => $vr['videoId'], 'title' => $title]; }
+            }
+            if (isset($node['lockupViewModel']['contentId'])) {                 // formato novo
+                $lv = $node['lockupViewModel']; $enc = json_encode($lv);
+                $title = $lv['metadata']['lockupMetadataViewModel']['title']['content'] ?? '';
+                $live = strpos($enc, 'UPCOMING') === false
+                     && (strpos($enc, 'BADGE_STYLE_LIVE') !== false || strpos($enc, 'LIVE_NOW') !== false);
+                if ($live && !isset($seen[$lv['contentId']])) { $seen[$lv['contentId']] = 1; $lives[] = ['id' => $lv['contentId'], 'title' => $title]; }
+            }
+            foreach ($node as $child) if (is_array($child)) $walk($child);
+        };
+        if (is_array($data)) $walk($data);
+    }
+    if ($lives) return $lives;
+    $log[] = 'lista de diretos: página do canal sem diretos reconhecidos';
+
+    // recurso: pedir a lista ao yt-dlp
+    if (is_executable(YTDLP)) {
+        $home = CACHE_DIR . '/home';
+        if (!is_dir($home)) @mkdir($home, 0700, true);
+        $cmd = 'HOME=' . escapeshellarg($home) . ' DENO_DIR=' . escapeshellarg("$home/deno") . ' PATH=/usr/local/bin:/usr/bin:/bin '
+             . 'timeout 60 ' . escapeshellarg(YTDLP) . ' --flat-playlist --playlist-end 30 --no-warnings --no-cache-dir '
+             . '--print ' . escapeshellarg('%(id)s|%(live_status)s|%(title)s') . ' '
+             . escapeshellarg($channelBase . '/streams') . ' 2>/dev/null';
+        foreach (preg_split('/\R/', trim((string)shell_exec($cmd))) as $line) {
+            $p = explode('|', $line, 3);
+            if (count($p) === 3 && $p[1] === 'is_live' && preg_match('/^[A-Za-z0-9_-]{11}$/', $p[0])) {
+                $lives[] = ['id' => $p[0], 'title' => $p[2]];
+            }
+        }
+        if (!$lives) $log[] = 'lista de diretos (yt-dlp): nenhum direto ativo';
+    }
+    return $lives;
+}
+
 // ======================= INÍCIO =======================
 
 if (ONLY_LOCALHOST) {
@@ -173,17 +250,38 @@ $debug = isset($_GET['debug']);
 
 $v = trim($_GET['v'] ?? '');
 $c = trim($_GET['c'] ?? '');
+$t = trim($_GET['t'] ?? '');
+if (strlen($t) > 150) fail(400, 'Título (&t=) demasiado longo.');
+$channelBase = null;
 if ($v !== '') {
     if (!preg_match('/^[A-Za-z0-9_-]{11}$/', $v)) fail(400, 'ID de vídeo inválido.');
     $pageUrl = "https://www.youtube.com/watch?v=$v";
     $cacheKey = "v_$v";
+    $t = '';                                    // com ?v= o título não é preciso
 } elseif ($c !== '') {
-    if (preg_match('/^UC[A-Za-z0-9_-]{22}$/', $c))            $pageUrl = "https://www.youtube.com/channel/$c/live";
-    elseif (preg_match('/^@?[A-Za-z0-9._-]{3,100}$/', $c))   $pageUrl = 'https://www.youtube.com/@' . ltrim($c, '@') . '/live';
+    if (preg_match('/^UC[A-Za-z0-9_-]{22}$/', $c))            $channelBase = "https://www.youtube.com/channel/$c";
+    elseif (preg_match('/^@?[A-Za-z0-9._-]{3,100}$/', $c))   $channelBase = 'https://www.youtube.com/@' . ltrim($c, '@');
     else fail(400, 'Canal inválido. Use @handle ou o ID UC... do canal.');
-    $cacheKey = 'c_' . strtolower(ltrim($c, '@'));
+    $pageUrl = $channelBase . '/live';
+    $cacheKey = 'c_' . strtolower(ltrim($c, '@')) . ($t !== '' ? '_t_' . substr(md5(norm($t)), 0, 10) : '');
 } else {
     fail(400, 'Falta o parâmetro ?v=ID_DO_VIDEO ou ?c=@canal');
+}
+
+// ---- &list=1: mostrar os diretos ativos do canal ----
+if (isset($_GET['list'])) {
+    if (!$channelBase) fail(400, 'Use &list=1 com ?c=@canal');
+    $log = [];
+    $lives = list_lives($channelBase, $log);
+    header('Content-Type: text/plain; charset=utf-8');
+    if (!$lives) { echo "Nenhum direto ativo neste canal.\n"; if ($log) echo "  - ", implode("\n  - ", $log), "\n"; exit; }
+    echo count($lives), " direto(s) ativo(s):\n\n";
+    foreach ($lives as $i => $l) {
+        echo '  ', $i + 1, ". {$l['id']}  {$l['title']}\n";
+    }
+    echo "\nFonte por título:  http://127.0.0.1:8088/ytlive.php?c=" . rawurlencode($c) . "&t=PALAVRAS&p=1\n";
+    echo "Fonte fixa:        http://127.0.0.1:8088/ytlive.php?v=ID&p=1\n";
+    exit;
 }
 
 // ---- cache ----
@@ -204,7 +302,22 @@ if (!$cached) {
     $unlock = function () use ($lock) { if ($lock) { flock($lock, LOCK_UN); fclose($lock); } };
 
     if (!$cached) {
-        $log = []; $m3u8 = null; $method = null;
+        $log = []; $m3u8 = null; $method = null; $chosenTitle = null;
+
+        // ---- &t=: escolher, entre os diretos ativos do canal, o que tem estas palavras no título ----
+        if ($t !== '') {
+            $lives = list_lives($channelBase, $log);
+            foreach ($lives as $l) {
+                if (title_matches($l['title'], $t)) { $v = $l['id']; $chosenTitle = $l['title']; break; }
+            }
+            if ($v === '') {
+                $unlock();
+                foreach ($lives as $l) $log[] = "ativo: {$l['id']}  {$l['title']}";
+                fail(404, $lives ? "Nenhum direto ativo do canal tem \"$t\" no título."
+                                 : 'O canal não tem nenhum direto ativo neste momento.', $log);
+            }
+            $pageUrl = "https://www.youtube.com/watch?v=$v";
+        }
 
         // ---- 1. página web ----
         $html = http($pageUrl, 'GET', [
@@ -267,7 +380,7 @@ if (!$cached) {
             $expires = min($expires, (int)$e[1] - CACHE_MARGIN);
         }
         $cached = ['url' => $m3u8, 'expires' => $expires, 'source' => $pageUrl,
-                   'videoId' => $videoId, 'method' => $method, 'created' => time(), 'log' => $log];
+                   'videoId' => $videoId, 'title' => $chosenTitle, 'method' => $method, 'created' => time(), 'log' => $log];
         @file_put_contents($cacheFile, json_encode($cached), LOCK_EX);
     }
     $unlock();
@@ -277,6 +390,7 @@ if ($debug) {
     header('Content-Type: text/plain; charset=utf-8');
     echo "OK\n";
     echo "Video:   {$cached['videoId']}\n";
+    if (!empty($cached['title'])) echo "Titulo:  {$cached['title']}\n";
     echo "Metodo:  {$cached['method']}\n";
     echo "Expira:  " . date('Y-m-d H:i:s', $cached['expires']) . "\n";
     echo "Link:    {$cached['url']}\n";
@@ -360,7 +474,11 @@ echo "Servidor (IP público): $IP"
 echo
 echo "Fonte para usar no XUI:"
 echo "  http://127.0.0.1:$PORT/ytlive.php?c=@NomeDoCanal&p=1"
+echo "  http://127.0.0.1:$PORT/ytlive.php?c=@NomeDoCanal&t=PALAVRAS&p=1   (canal com vários diretos)"
 echo "  http://127.0.0.1:$PORT/ytlive.php?v=ID_DO_VIDEO&p=1"
+echo
+echo "Ver os diretos ativos de um canal:"
+echo "  curl \"http://127.0.0.1:$PORT/ytlive.php?c=@NomeDoCanal&list=1\""
 echo
 echo "Testar um direto neste servidor:"
 echo "  curl \"http://127.0.0.1:$PORT/ytlive.php?v=guvwk0S17w4&debug=1\""
