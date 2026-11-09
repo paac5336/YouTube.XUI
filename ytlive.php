@@ -20,6 +20,8 @@
  *   2. API interna do YouTube como app de iPhone (IOS)
  *   3. API interna do YouTube como app Android VR
  *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp)
+ *      Se o YouTube pedir "Sign in to confirm you're not a bot", põe as cookies de uma conta
+ *      em /opt/ytlive/cookies.txt (formato Netscape) — o yt-dlp passa a usá-las.
  */
 
 // ===================== CONFIGURAÇÃO =====================
@@ -29,6 +31,7 @@ const CACHE_MARGIN   = 600;           // renovar o link 10 min antes de expirar
 const CACHE_FALLBACK = 3 * 3600;      // validade se o link não indicar expiração (3 h)
 const HTTP_TIMEOUT   = 15;            // segundos
 const YTDLP          = '/usr/local/bin/yt-dlp';
+const COOKIES        = '/opt/ytlive/cookies.txt';  // opcional: cookies do YouTube (formato Netscape) para o yt-dlp
 const WEB_UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                      . '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 // ========================================================
@@ -99,6 +102,14 @@ function innertube(string $videoId, string $client): ?string {
     return is_hls($u) ? $u : null;
 }
 
+// --- Cookies para o yt-dlp: usa uma cópia na pasta de trabalho (o yt-dlp reescreve o ficheiro) ---
+function ytdlp_cookies(string $home): string {
+    if (!is_readable(COOKIES)) return '';
+    $copy = "$home/cookies.txt";
+    if (!is_file($copy) || filemtime(COOKIES) > filemtime($copy)) @copy(COOKIES, $copy);
+    return is_readable($copy) ? '--cookies ' . escapeshellarg($copy) . ' ' : '';
+}
+
 // --- Método 4: yt-dlp ---
 function ytdlp(string $videoId, string &$err): ?string {
     if (!is_executable(YTDLP)) { $err = 'yt-dlp não instalado'; return null; }
@@ -107,6 +118,7 @@ function ytdlp(string $videoId, string &$err): ?string {
     if (!is_dir($home)) @mkdir($home, 0700, true);
     $env = 'HOME=' . escapeshellarg($home) . ' DENO_DIR=' . escapeshellarg("$home/deno")
          . ' PATH=/usr/local/bin:/usr/bin:/bin ';
+    $cookies = ytdlp_cookies($home);
     $url = escapeshellarg("https://www.youtube.com/watch?v=$videoId");
     // 1º: clientes web (funcionam mesmo com a reprodução fora do YouTube desativada); 2º: padrão do yt-dlp
     $tries = [
@@ -115,7 +127,7 @@ function ytdlp(string $videoId, string &$err): ?string {
     ];
     $errs = [];
     foreach ($tries as $extra) {
-        $cmd = $env . 'timeout 60 ' . escapeshellarg(YTDLP) . " -g --no-warnings --no-cache-dir --no-playlist $extra $url 2>&1";
+        $cmd = $env . 'timeout 60 ' . escapeshellarg(YTDLP) . " -g --no-warnings --no-cache-dir --no-playlist $cookies$extra $url 2>&1";
         $out = (string)shell_exec($cmd);
         foreach (preg_split('/\R/', trim($out)) as $line) {
             if (is_hls(trim($line))) return trim($line);
@@ -184,7 +196,7 @@ function list_lives(string $channelBase, array &$log): array {
         $home = CACHE_DIR . '/home';
         if (!is_dir($home)) @mkdir($home, 0700, true);
         $cmd = 'HOME=' . escapeshellarg($home) . ' DENO_DIR=' . escapeshellarg("$home/deno") . ' PATH=/usr/local/bin:/usr/bin:/bin '
-             . 'timeout 60 ' . escapeshellarg(YTDLP) . ' --flat-playlist --playlist-end 30 --no-warnings --no-cache-dir '
+             . 'timeout 60 ' . escapeshellarg(YTDLP) . ' --flat-playlist --playlist-end 30 --no-warnings --no-cache-dir ' . ytdlp_cookies($home)
              . '--print ' . escapeshellarg('%(id)s|%(live_status)s|%(title)s') . ' '
              . escapeshellarg($channelBase . '/streams') . ' 2>/dev/null';
         foreach (preg_split('/\R/', trim((string)shell_exec($cmd))) as $line) {

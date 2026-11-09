@@ -186,6 +186,24 @@ O servidor pode ser reiniciado: o serviço arranca sozinho. A cache em `/tmp` é
 | `/etc/cron.d/ytlive-ytdlp` | atualização diária do yt-dlp |
 | `/tmp/ytlive_cache/` | cache de links |
 
+## Erro "Sign in to confirm you're not a bot"
+
+O YouTube às vezes bloqueia o IP do VPS. O debug mostra `isLive=true`, os métodos falham e o yt-dlp diz *Sign in to confirm you're not a bot*. Nesse caso dá cookies de uma conta YouTube ao script:
+
+1. No PC, abre uma **janela privada** do Chrome/Firefox e entra numa conta YouTube (de preferência uma conta secundária).
+2. Com a extensão **Get cookies.txt LOCALLY**, exporta as cookies de `youtube.com` (formato Netscape).
+3. **Fecha a janela privada** sem sair da conta (se saíres, as cookies deixam de valer).
+4. Copia o ficheiro para o servidor com o WinSCP e instala-o:
+
+```bash
+mv /root/cookies.txt /opt/ytlive/cookies.txt
+chown www-data:www-data /opt/ytlive/cookies.txt
+chmod 600 /opt/ytlive/cookies.txt
+rm -rf /tmp/ytlive_cache/*
+```
+
+O script passa a usá-las no yt-dlp sem reiniciar nada. Se o erro voltar passadas semanas, as cookies expiraram: repete os passos.
+
 ## Desinstalar
 
 ```bash
