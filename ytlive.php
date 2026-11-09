@@ -19,7 +19,7 @@
  *   1. página web do YouTube (método antigo)
  *   2. API interna do YouTube como app de iPhone (IOS)
  *   3. API interna do YouTube como app Android VR
- *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp)
+ *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp), com PO Token do bgutil (127.0.0.1:4416)
  *      Se o YouTube pedir "Sign in to confirm you're not a bot", põe as cookies de uma conta
  *      em /opt/ytlive/cookies.txt (formato Netscape) — o yt-dlp passa a usá-las.
  */
@@ -134,7 +134,9 @@ function ytdlp(string $videoId, string &$err): ?string {
         }
         $errs[] = substr(trim($out), 0, 160);
     }
-    $err = 'yt-dlp: ' . implode(' || ', $errs);
+    $bg = @fsockopen('127.0.0.1', 4416, $en, $es, 1);
+    if ($bg) fclose($bg);
+    $err = 'yt-dlp' . ($bg ? ' (PO Token: bgutil ativo)' : ' (PO Token: bgutil PARADO)') . ': ' . implode(' || ', $errs);
     return null;
 }
 

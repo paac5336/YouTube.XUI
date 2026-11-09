@@ -7,12 +7,12 @@ DIR=/opt/ytlive
 
 if [ "$EUID" -ne 0 ]; then echo "Corre como root: sudo bash $0"; exit 1; fi
 
-echo "==> 1/6 A instalar PHP..."
+echo "==> 1/7 A instalar PHP..."
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq php-cli curl unzip >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq php-cli curl unzip git >/dev/null
 php -v | head -1
 
-echo "==> 2/6 A instalar/atualizar o yt-dlp..."
+echo "==> 2/7 A instalar/atualizar o yt-dlp..."
 curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp.new \
   && mv /usr/local/bin/yt-dlp.new /usr/local/bin/yt-dlp && chmod a+rx /usr/local/bin/yt-dlp \
   && echo "    yt-dlp $(/usr/local/bin/yt-dlp --version)" \
@@ -27,7 +27,68 @@ if ! [ -x /usr/local/bin/deno ]; then
 fi
 [ -x /usr/local/bin/deno ] && echo "    $(/usr/local/bin/deno --version | head -1)"
 
-echo "==> 3/6 A verificar a porta $PORT..."
+echo "==> 3/7 A instalar o PO Token (bgutil) — evita o erro \"not a bot\" do YouTube..."
+# script que instala/atualiza o bgutil; corre agora e todas as semanas (segunda às 05:37)
+mkdir -p /opt/bgutil
+cat > /opt/bgutil/update_bgutil.sh <<'BGEOF'
+#!/bin/bash
+# Instala/atualiza o bgutil (gerador de PO Token para o yt-dlp). "force" reinstala mesmo sem versão nova.
+set -e
+BG=/opt/bgutil
+REPO=https://github.com/Brainicism/bgutil-ytdlp-pot-provider
+DENO=/usr/local/bin/deno
+VER=$(git ls-remote --tags --refs "$REPO.git" 2>/dev/null | sed 's#.*refs/tags/##' \
+      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+[ -n "$VER" ] || { echo "    bgutil: não consegui ver a última versão (sem rede?)"; exit 0; }
+if [ "$1" != force ] && [ "$(cat $BG/VERSION 2>/dev/null)" = "$VER" ] && systemctl is-active --quiet bgutil; then
+  echo "    bgutil $VER já instalado"; exit 0
+fi
+[ -x "$DENO" ] || { echo "    bgutil: falta o Deno em $DENO"; exit 1; }
+id bgutil >/dev/null 2>&1 || useradd -r -M -d $BG -s /usr/sbin/nologin bgutil
+NEW=$BG/new; rm -rf $NEW; mkdir -p $NEW
+git -c advice.detachedHead=false clone -q --depth 1 --branch "$VER" "$REPO.git" $NEW/src
+( cd $NEW/src/server && DENO_DIR=$BG/deno-cache "$DENO" install --allow-scripts=npm:canvas --frozen >/dev/null 2>&1 )
+curl -fsSL -o $NEW/plugin.zip "$REPO/releases/download/$VER/bgutil-ytdlp-pot-provider.zip"
+# trocar a versão antiga pela nova
+systemctl stop bgutil 2>/dev/null || true
+rm -rf $BG/server && mv $NEW/src/server $BG/server
+mkdir -p /etc/yt-dlp/plugins && mv $NEW/plugin.zip /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
+chmod 755 /etc/yt-dlp /etc/yt-dlp/plugins; chmod 644 /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
+rm -rf $NEW; echo "$VER" > $BG/VERSION
+chown -R bgutil:bgutil $BG; chown root:root $BG/update_bgutil.sh
+cat > /etc/systemd/system/bgutil.service <<SVCEOF
+[Unit]
+Description=bgutil PO Token para o yt-dlp (ytlive)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=$BG/server/node_modules
+Environment=DENO_DIR=$BG/deno-cache
+ExecStart=$DENO run --allow-env --allow-net --allow-ffi=. --allow-read=. ../src/main.ts --host 127.0.0.1
+Restart=always
+RestartSec=5
+User=bgutil
+Group=bgutil
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+systemctl daemon-reload
+systemctl enable bgutil >/dev/null 2>&1
+systemctl restart bgutil
+for i in $(seq 1 20); do curl -s --max-time 2 http://127.0.0.1:4416/ping >/dev/null && break; sleep 1; done
+if curl -s --max-time 2 http://127.0.0.1:4416/ping >/dev/null; then
+  echo "    bgutil $VER: ATIVO (127.0.0.1:4416)"
+else
+  echo "    AVISO: o bgutil não respondeu. Vê: journalctl -u bgutil -n 30"
+fi
+BGEOF
+chmod 700 /opt/bgutil/update_bgutil.sh
+bash /opt/bgutil/update_bgutil.sh || echo "    AVISO: o bgutil não ficou instalado (o script funciona na mesma sem ele)."
+echo '37 5 * * 1 root /opt/bgutil/update_bgutil.sh >/dev/null 2>&1' > /etc/cron.d/ytlive-bgutil
+
+echo "==> 4/7 A verificar a porta $PORT..."
 if ss -ltn | awk '{print $4}' | grep -qE "[:.]$PORT\$"; then
   if systemctl is-active --quiet ytlive; then
     echo "    Porta $PORT usada pelo próprio ytlive (reinstalação) — ok."
@@ -37,7 +98,7 @@ if ss -ltn | awk '{print $4}' | grep -qE "[:.]$PORT\$"; then
   fi
 fi
 
-echo "==> 4/6 A criar $DIR/ytlive.php..."
+echo "==> 5/7 A criar $DIR/ytlive.php..."
 mkdir -p "$DIR"
 cat > "$DIR/ytlive.php" <<'PHPEOF'
 <?php
@@ -61,7 +122,7 @@ cat > "$DIR/ytlive.php" <<'PHPEOF'
  *   1. página web do YouTube (método antigo)
  *   2. API interna do YouTube como app de iPhone (IOS)
  *   3. API interna do YouTube como app Android VR
- *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp)
+ *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp), com PO Token do bgutil (127.0.0.1:4416)
  *      Se o YouTube pedir "Sign in to confirm you're not a bot", põe as cookies de uma conta
  *      em /opt/ytlive/cookies.txt (formato Netscape) — o yt-dlp passa a usá-las.
  */
@@ -176,7 +237,9 @@ function ytdlp(string $videoId, string &$err): ?string {
         }
         $errs[] = substr(trim($out), 0, 160);
     }
-    $err = 'yt-dlp: ' . implode(' || ', $errs);
+    $bg = @fsockopen('127.0.0.1', 4416, $en, $es, 1);
+    if ($bg) fclose($bg);
+    $err = 'yt-dlp' . ($bg ? ' (PO Token: bgutil ativo)' : ' (PO Token: bgutil PARADO)') . ': ' . implode(' || ', $errs);
     return null;
 }
 
@@ -446,7 +509,7 @@ chown -R www-data:www-data "$DIR"
 chmod 644 "$DIR/ytlive.php"
 php -l "$DIR/ytlive.php"
 
-echo "==> 5/6 A criar o serviço systemd..."
+echo "==> 6/7 A criar o serviço systemd..."
 cat > /etc/systemd/system/ytlive.service <<EOF
 [Unit]
 Description=YouTube Live para XUI (ytlive)
@@ -470,13 +533,14 @@ rm -rf /tmp/ytlive_cache
 systemctl restart ytlive
 sleep 2
 
-echo "==> 6/6 A testar..."
+echo "==> 7/7 A testar..."
 if systemctl is-active --quiet ytlive; then
   echo "    Serviço ytlive: ATIVO"
 else
   echo "ERRO: o serviço não arrancou. Vê: journalctl -u ytlive -n 30"; exit 1
 fi
 R=$(curl -s "http://127.0.0.1:$PORT/ytlive.php")
+if systemctl is-active --quiet bgutil; then echo "    Serviço bgutil (PO Token): ATIVO"; else echo "    Serviço bgutil (PO Token): parado"; fi
 echo "    Resposta do script: $R"
 
 IP=$(curl -s --max-time 5 https://api.ipify.org || echo "?")

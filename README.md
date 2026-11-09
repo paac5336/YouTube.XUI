@@ -44,6 +44,7 @@ O instalador põe:
 - PHP (`php-cli`)
 - **yt-dlp** em `/usr/local/bin/yt-dlp`, atualizado todos os dias às 05:17
 - **Deno** em `/usr/local/bin/deno` (motor JavaScript de que o yt-dlp precisa para o YouTube)
+- **bgutil (PO Token)** em `/opt/bgutil`, serviço `bgutil` na porta interna `127.0.0.1:4416`, atualizado todas as segundas às 05:37. Gera os tokens anti-bot que o YouTube pede, para evitar o erro *Sign in to confirm you're not a bot*
 - o script em `/opt/ytlive/ytlive.php`
 - o serviço `ytlive` na porta interna `127.0.0.1:8088`, com 4 pedidos em simultâneo e arranque automático
 
@@ -184,11 +185,25 @@ O servidor pode ser reiniciado: o serviço arranca sozinho. A cache em `/tmp` é
 | `/usr/local/bin/yt-dlp` | yt-dlp |
 | `/usr/local/bin/deno` | Deno |
 | `/etc/cron.d/ytlive-ytdlp` | atualização diária do yt-dlp |
+| `/opt/bgutil/` | bgutil (PO Token) e o script `update_bgutil.sh` |
+| `/etc/systemd/system/bgutil.service` | serviço do bgutil (porta 4416, só `127.0.0.1`) |
+| `/etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip` | plugin do yt-dlp que vai buscar o PO Token |
+| `/etc/cron.d/ytlive-bgutil` | atualização semanal do bgutil |
 | `/tmp/ytlive_cache/` | cache de links |
 
 ## Erro "Sign in to confirm you're not a bot"
 
-O YouTube às vezes bloqueia o IP do VPS. O debug mostra `isLive=true`, os métodos falham e o yt-dlp diz *Sign in to confirm you're not a bot*. Nesse caso dá cookies de uma conta YouTube ao script:
+O YouTube às vezes bloqueia o IP do VPS. O debug mostra `isLive=true`, os métodos falham e o yt-dlp diz *Sign in to confirm you're not a bot*.
+
+Primeiro confirma que o PO Token está a correr. A linha do yt-dlp no debug diz `bgutil ativo` ou `bgutil PARADO`:
+
+```bash
+systemctl status bgutil
+curl -s http://127.0.0.1:4416/ping
+bash /opt/bgutil/update_bgutil.sh force     # reinstalar o bgutil
+```
+
+Se o bgutil está ativo e o erro continua, o IP do VPS está bloqueado a sério e o PO Token não chega. Aí dá cookies de uma conta YouTube ao script:
 
 1. No PC, abre uma **janela privada** do Chrome/Firefox e entra numa conta YouTube (de preferência uma conta secundária).
 2. Com a extensão **Get cookies.txt LOCALLY**, exporta as cookies de `youtube.com` (formato Netscape).
@@ -207,8 +222,9 @@ O script passa a usá-las no yt-dlp sem reiniciar nada. Se o erro voltar passada
 ## Desinstalar
 
 ```bash
-systemctl disable --now ytlive
-rm -f /etc/systemd/system/ytlive.service /etc/cron.d/ytlive-ytdlp
+systemctl disable --now ytlive bgutil
+rm -f /etc/systemd/system/ytlive.service /etc/systemd/system/bgutil.service /etc/cron.d/ytlive-ytdlp /etc/cron.d/ytlive-bgutil
+rm -rf /opt/bgutil /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip; userdel bgutil
 systemctl daemon-reload
 rm -rf /opt/ytlive /tmp/ytlive_cache
 # opcional: rm -f /usr/local/bin/yt-dlp /usr/local/bin/deno
