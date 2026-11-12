@@ -19,9 +19,9 @@
  *   1. página web do YouTube (método antigo)
  *   2. API interna do YouTube como app de iPhone (IOS)
  *   3. API interna do YouTube como app Android VR
- *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp), com PO Token do bgutil (127.0.0.1:4416)
- *      Se o YouTube pedir "Sign in to confirm you're not a bot", põe as cookies de uma conta
- *      em /opt/ytlive/cookies.txt (formato Netscape) — o yt-dlp passa a usá-las.
+ *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp)
+ *      Se o YouTube pedir "Sign in to confirm you're not a bot", exporta as cookies de uma conta
+ *      para /root/cookies.txt e corre:  ytlive-cookies   (ver o README)
  */
 
 // ===================== CONFIGURAÇÃO =====================
@@ -103,11 +103,23 @@ function innertube(string $videoId, string $client): ?string {
 }
 
 // --- Cookies para o yt-dlp: usa uma cópia na pasta de trabalho (o yt-dlp reescreve o ficheiro) ---
+// A cópia é refeita sempre que o ficheiro em COOKIES muda (instalado com o comando ytlive-cookies).
 function ytdlp_cookies(string $home): string {
-    if (!is_readable(COOKIES)) return '';
     $copy = "$home/cookies.txt";
-    if (!is_file($copy) || filemtime(COOKIES) > filemtime($copy)) @copy(COOKIES, $copy);
+    if (!is_readable(COOKIES)) { @unlink($copy); @unlink("$copy.src"); return ''; }
+    clearstatcache();
+    $sig = filemtime(COOKIES) . '|' . filesize(COOKIES) . '|' . fileinode(COOKIES);
+    if (!is_file($copy) || @file_get_contents("$copy.src") !== $sig) {
+        if (@copy(COOKIES, $copy)) { @chmod($copy, 0600); @file_put_contents("$copy.src", $sig); }
+    }
     return is_readable($copy) ? '--cookies ' . escapeshellarg($copy) . ' ' : '';
+}
+
+// --- Estado das cookies, para o diagnóstico ---
+function cookies_info(): string {
+    if (!is_readable(COOKIES)) return 'sem cookies';
+    $dias = (int)floor((time() - filemtime(COOKIES)) / 86400);
+    return "com cookies, instaladas há $dias dia(s)";
 }
 
 // --- Método 4: yt-dlp ---
@@ -134,9 +146,7 @@ function ytdlp(string $videoId, string &$err): ?string {
         }
         $errs[] = substr(trim($out), 0, 160);
     }
-    $bg = @fsockopen('127.0.0.1', 4416, $en, $es, 1);
-    if ($bg) fclose($bg);
-    $err = 'yt-dlp' . ($bg ? ' (PO Token: bgutil ativo)' : ' (PO Token: bgutil PARADO)') . ': ' . implode(' || ', $errs);
+    $err = 'yt-dlp (' . cookies_info() . '): ' . implode(' || ', $errs);
     return null;
 }
 

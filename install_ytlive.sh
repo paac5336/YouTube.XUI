@@ -7,12 +7,12 @@ DIR=/opt/ytlive
 
 if [ "$EUID" -ne 0 ]; then echo "Corre como root: sudo bash $0"; exit 1; fi
 
-echo "==> 1/7 A instalar PHP..."
+echo "==> 1/6 A instalar PHP..."
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq php-cli curl unzip git >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq php-cli curl unzip >/dev/null
 php -v | head -1
 
-echo "==> 2/7 A instalar/atualizar o yt-dlp..."
+echo "==> 2/6 A instalar/atualizar o yt-dlp..."
 curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp.new \
   && mv /usr/local/bin/yt-dlp.new /usr/local/bin/yt-dlp && chmod a+rx /usr/local/bin/yt-dlp \
   && echo "    yt-dlp $(/usr/local/bin/yt-dlp --version)" \
@@ -27,68 +27,7 @@ if ! [ -x /usr/local/bin/deno ]; then
 fi
 [ -x /usr/local/bin/deno ] && echo "    $(/usr/local/bin/deno --version | head -1)"
 
-echo "==> 3/7 A instalar o PO Token (bgutil) — evita o erro \"not a bot\" do YouTube..."
-# script que instala/atualiza o bgutil; corre agora e todas as semanas (segunda às 05:37)
-mkdir -p /opt/bgutil
-cat > /opt/bgutil/update_bgutil.sh <<'BGEOF'
-#!/bin/bash
-# Instala/atualiza o bgutil (gerador de PO Token para o yt-dlp). "force" reinstala mesmo sem versão nova.
-set -e
-BG=/opt/bgutil
-REPO=https://github.com/Brainicism/bgutil-ytdlp-pot-provider
-DENO=/usr/local/bin/deno
-VER=$(git ls-remote --tags --refs "$REPO.git" 2>/dev/null | sed 's#.*refs/tags/##' \
-      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
-[ -n "$VER" ] || { echo "    bgutil: não consegui ver a última versão (sem rede?)"; exit 0; }
-if [ "$1" != force ] && [ "$(cat $BG/VERSION 2>/dev/null)" = "$VER" ] && systemctl is-active --quiet bgutil; then
-  echo "    bgutil $VER já instalado"; exit 0
-fi
-[ -x "$DENO" ] || { echo "    bgutil: falta o Deno em $DENO"; exit 1; }
-id bgutil >/dev/null 2>&1 || useradd -r -M -d $BG -s /usr/sbin/nologin bgutil
-NEW=$BG/new; rm -rf $NEW; mkdir -p $NEW
-git -c advice.detachedHead=false clone -q --depth 1 --branch "$VER" "$REPO.git" $NEW/src
-( cd $NEW/src/server && DENO_DIR=$BG/deno-cache "$DENO" install --allow-scripts=npm:canvas --frozen >/dev/null 2>&1 )
-curl -fsSL -o $NEW/plugin.zip "$REPO/releases/download/$VER/bgutil-ytdlp-pot-provider.zip"
-# trocar a versão antiga pela nova
-systemctl stop bgutil 2>/dev/null || true
-rm -rf $BG/server && mv $NEW/src/server $BG/server
-mkdir -p /etc/yt-dlp/plugins && mv $NEW/plugin.zip /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
-chmod 755 /etc/yt-dlp /etc/yt-dlp/plugins; chmod 644 /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
-rm -rf $NEW; echo "$VER" > $BG/VERSION
-chown -R bgutil:bgutil $BG; chown root:root $BG/update_bgutil.sh
-cat > /etc/systemd/system/bgutil.service <<SVCEOF
-[Unit]
-Description=bgutil PO Token para o yt-dlp (ytlive)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-WorkingDirectory=$BG/server/node_modules
-Environment=DENO_DIR=$BG/deno-cache
-ExecStart=$DENO run --allow-env --allow-net --allow-ffi=. --allow-read=. ../src/main.ts --host 127.0.0.1
-Restart=always
-RestartSec=5
-User=bgutil
-Group=bgutil
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-systemctl daemon-reload
-systemctl enable bgutil >/dev/null 2>&1
-systemctl restart bgutil
-for i in $(seq 1 20); do curl -s --max-time 2 http://127.0.0.1:4416/ping >/dev/null && break; sleep 1; done
-if curl -s --max-time 2 http://127.0.0.1:4416/ping >/dev/null; then
-  echo "    bgutil $VER: ATIVO (127.0.0.1:4416)"
-else
-  echo "    AVISO: o bgutil não respondeu. Vê: journalctl -u bgutil -n 30"
-fi
-BGEOF
-chmod 700 /opt/bgutil/update_bgutil.sh
-bash /opt/bgutil/update_bgutil.sh || echo "    AVISO: o bgutil não ficou instalado (o script funciona na mesma sem ele)."
-echo '37 5 * * 1 root /opt/bgutil/update_bgutil.sh >/dev/null 2>&1' > /etc/cron.d/ytlive-bgutil
-
-echo "==> 4/7 A verificar a porta $PORT..."
+echo "==> 3/6 A verificar a porta $PORT..."
 if ss -ltn | awk '{print $4}' | grep -qE "[:.]$PORT\$"; then
   if systemctl is-active --quiet ytlive; then
     echo "    Porta $PORT usada pelo próprio ytlive (reinstalação) — ok."
@@ -98,7 +37,7 @@ if ss -ltn | awk '{print $4}' | grep -qE "[:.]$PORT\$"; then
   fi
 fi
 
-echo "==> 5/7 A criar $DIR/ytlive.php..."
+echo "==> 4/6 A criar $DIR/ytlive.php..."
 mkdir -p "$DIR"
 cat > "$DIR/ytlive.php" <<'PHPEOF'
 <?php
@@ -122,9 +61,9 @@ cat > "$DIR/ytlive.php" <<'PHPEOF'
  *   1. página web do YouTube (método antigo)
  *   2. API interna do YouTube como app de iPhone (IOS)
  *   3. API interna do YouTube como app Android VR
- *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp), com PO Token do bgutil (127.0.0.1:4416)
- *      Se o YouTube pedir "Sign in to confirm you're not a bot", põe as cookies de uma conta
- *      em /opt/ytlive/cookies.txt (formato Netscape) — o yt-dlp passa a usá-las.
+ *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp)
+ *      Se o YouTube pedir "Sign in to confirm you're not a bot", exporta as cookies de uma conta
+ *      para /root/cookies.txt e corre:  ytlive-cookies   (ver o README)
  */
 
 // ===================== CONFIGURAÇÃO =====================
@@ -206,11 +145,23 @@ function innertube(string $videoId, string $client): ?string {
 }
 
 // --- Cookies para o yt-dlp: usa uma cópia na pasta de trabalho (o yt-dlp reescreve o ficheiro) ---
+// A cópia é refeita sempre que o ficheiro em COOKIES muda (instalado com o comando ytlive-cookies).
 function ytdlp_cookies(string $home): string {
-    if (!is_readable(COOKIES)) return '';
     $copy = "$home/cookies.txt";
-    if (!is_file($copy) || filemtime(COOKIES) > filemtime($copy)) @copy(COOKIES, $copy);
+    if (!is_readable(COOKIES)) { @unlink($copy); @unlink("$copy.src"); return ''; }
+    clearstatcache();
+    $sig = filemtime(COOKIES) . '|' . filesize(COOKIES) . '|' . fileinode(COOKIES);
+    if (!is_file($copy) || @file_get_contents("$copy.src") !== $sig) {
+        if (@copy(COOKIES, $copy)) { @chmod($copy, 0600); @file_put_contents("$copy.src", $sig); }
+    }
     return is_readable($copy) ? '--cookies ' . escapeshellarg($copy) . ' ' : '';
+}
+
+// --- Estado das cookies, para o diagnóstico ---
+function cookies_info(): string {
+    if (!is_readable(COOKIES)) return 'sem cookies';
+    $dias = (int)floor((time() - filemtime(COOKIES)) / 86400);
+    return "com cookies, instaladas há $dias dia(s)";
 }
 
 // --- Método 4: yt-dlp ---
@@ -237,9 +188,7 @@ function ytdlp(string $videoId, string &$err): ?string {
         }
         $errs[] = substr(trim($out), 0, 160);
     }
-    $bg = @fsockopen('127.0.0.1', 4416, $en, $es, 1);
-    if ($bg) fclose($bg);
-    $err = 'yt-dlp' . ($bg ? ' (PO Token: bgutil ativo)' : ' (PO Token: bgutil PARADO)') . ': ' . implode(' || ', $errs);
+    $err = 'yt-dlp (' . cookies_info() . '): ' . implode(' || ', $errs);
     return null;
 }
 
@@ -509,7 +458,83 @@ chown -R www-data:www-data "$DIR"
 chmod 644 "$DIR/ytlive.php"
 php -l "$DIR/ytlive.php"
 
-echo "==> 6/7 A criar o serviço systemd..."
+# comando ytlive-cookies: instala as cookies do YouTube (exportadas do browser) para o yt-dlp
+cat > /usr/local/bin/ytlive-cookies <<'CKEOF'
+#!/bin/bash
+# ytlive-cookies — instala as cookies do YouTube para o ytlive (yt-dlp)
+#   ytlive-cookies                 instala /root/cookies.txt
+#   ytlive-cookies FICHEIRO        instala outro ficheiro
+#   ytlive-cookies --estado        mostra se há cookies e há quanto tempo foram instaladas
+#   ytlive-cookies --remover       apaga as cookies
+DEST=/opt/ytlive/cookies.txt
+CACHE=/tmp/ytlive_cache
+if [ "$EUID" -ne 0 ]; then echo "Corre como root: sudo ytlive-cookies"; exit 1; fi
+
+limpar_cache() {   # apaga os links guardados e a cópia de trabalho das cookies (não mexe no resto)
+  rm -f "$CACHE"/*.json "$CACHE"/home/cookies.txt "$CACHE"/home/cookies.txt.src 2>/dev/null
+}
+
+case "$1" in
+  --estado)
+    if [ -f "$DEST" ]; then
+      DIAS=$(( ( $(date +%s) - $(stat -c %Y "$DEST") ) / 86400 ))
+      echo "Cookies instaladas em $DEST há $DIAS dia(s)."
+    else
+      echo "Não há cookies instaladas."
+    fi
+    exit 0 ;;
+  --remover)
+    rm -f "$DEST"; limpar_cache
+    echo "Cookies apagadas. O yt-dlp volta a funcionar sem conta."
+    exit 0 ;;
+  -h|--help|--ajuda)
+    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+SRC=${1:-/root/cookies.txt}
+[ -f "$SRC" ] || { echo "ERRO: não encontrei $SRC"; echo "Copia o cookies.txt para /root com o WinSCP e corre outra vez."; exit 1; }
+
+TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
+# tirar o BOM e os \r do Windows
+sed '1s/^\xEF\xBB\xBF//; s/\r$//' "$SRC" > "$TMP"
+
+# verificar o formato (Netscape: 7 colunas separadas por TAB)
+YT=$(awk -F'\t' 'NF==7 && $1 ~ /youtube\.com$/' "$TMP" | wc -l)
+if [ "$YT" -eq 0 ]; then
+  echo "ERRO: o ficheiro não tem cookies do youtube.com no formato Netscape."
+  echo "Exporta com a extensão \"Get cookies.txt LOCALLY\", estando em youtube.com, no formato Netscape."
+  exit 1
+fi
+# verificar se tem sessão iniciada
+if ! awk -F'\t' 'NF==7 && $1 ~ /youtube\.com$/ {print $6}' "$TMP" \
+     | grep -qxE 'LOGIN_INFO|SAPISID|__Secure-3PSID|__Secure-1PSID'; then
+  echo "ERRO: as cookies não têm sessão iniciada numa conta."
+  echo "Entra numa conta no YouTube (janela privada) antes de exportar."
+  exit 1
+fi
+
+install -m 600 -o www-data -g www-data "$TMP" "$DEST"
+limpar_cache
+rm -f "$SRC"
+echo "OK: $YT cookies do YouTube instaladas em $DEST (o original foi apagado)."
+echo
+echo "Testa um direto:"
+echo "  curl \"http://127.0.0.1:8088/ytlive.php?v=ID_DO_VIDEO&debug=1\""
+CKEOF
+chmod 755 /usr/local/bin/ytlive-cookies
+
+# remover o PO Token (bgutil) de instalações antigas — já não é usado
+if [ -d /opt/bgutil ] || [ -f /etc/systemd/system/bgutil.service ]; then
+  echo "    A remover o PO Token (bgutil) de uma instalação anterior..."
+  systemctl disable --now bgutil >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/bgutil.service /etc/cron.d/ytlive-bgutil /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
+  rmdir /etc/yt-dlp/plugins /etc/yt-dlp 2>/dev/null || true
+  rm -rf /opt/bgutil
+  userdel bgutil >/dev/null 2>&1 || true
+  systemctl daemon-reload
+fi
+
+echo "==> 5/6 A criar o serviço systemd..."
 cat > /etc/systemd/system/ytlive.service <<EOF
 [Unit]
 Description=YouTube Live para XUI (ytlive)
@@ -533,14 +558,13 @@ rm -rf /tmp/ytlive_cache
 systemctl restart ytlive
 sleep 2
 
-echo "==> 7/7 A testar..."
+echo "==> 6/6 A testar..."
 if systemctl is-active --quiet ytlive; then
   echo "    Serviço ytlive: ATIVO"
 else
   echo "ERRO: o serviço não arrancou. Vê: journalctl -u ytlive -n 30"; exit 1
 fi
 R=$(curl -s "http://127.0.0.1:$PORT/ytlive.php")
-if systemctl is-active --quiet bgutil; then echo "    Serviço bgutil (PO Token): ATIVO"; else echo "    Serviço bgutil (PO Token): parado"; fi
 echo "    Resposta do script: $R"
 
 IP=$(curl -s --max-time 5 https://api.ipify.org || echo "?")
@@ -555,6 +579,9 @@ echo "  http://127.0.0.1:$PORT/ytlive.php?v=ID_DO_VIDEO&p=1"
 echo
 echo "Ver os diretos ativos de um canal:"
 echo "  curl \"http://127.0.0.1:$PORT/ytlive.php?c=@NomeDoCanal&list=1\""
+echo
+echo "Se o YouTube pedir \"not a bot\": copia o cookies.txt para /root e corre:"
+echo "  ytlive-cookies"
 echo
 echo "Testar um direto neste servidor:"
 echo "  curl \"http://127.0.0.1:$PORT/ytlive.php?v=guvwk0S17w4&debug=1\""
