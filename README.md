@@ -32,7 +32,8 @@ O link do YouTube leva o IP do servidor que o pediu, por isso **o script tem de 
 ```bash
 cd /root
 # copia o install_ytlive.sh para aqui com o WinSCP
-# (o repositório é privado: o download direto por curl só funciona se o tornares público)
+# ou, se o repositório estiver público:
+# curl -fsSL https://raw.githubusercontent.com/paac5336/YouTube.XUI/main/install_ytlive.sh -o install_ytlive.sh
 
 head -1 install_ytlive.sh          # tem de mostrar: #!/bin/bash
 sed -i 's/\r$//' install_ytlive.sh
@@ -48,7 +49,7 @@ O instalador põe:
 - o script em `/opt/ytlive/ytlive.php`
 - o serviço `ytlive` na porta interna `127.0.0.1:8088`, com 4 pedidos em simultâneo e arranque automático
 
-Pode correr-se outra vez para atualizar. Funciona em Ubuntu 20.04 e 22.04.
+Pode correr-se outra vez para atualizar; as cookies instaladas mantêm-se. Funciona em Ubuntu 20.04 e 22.04.
 
 ## 2. Testar um canal
 
@@ -137,7 +138,11 @@ Exemplo testado: Pai Natal 24h → `c=UCHdUmP7lMXJE9aUAtFQbJOg`
 | `Sem direto ativo` | o canal não está em direto, ou é um vídeo normal | esperar pelo direto; vídeos normais não funcionam |
 | `O canal não tem nenhum direto ativo` | canal offline | o stream volta sozinho quando o canal transmitir |
 | `Nenhum direto ativo do canal tem "..." no título` | as palavras do `&t=` não existem em nenhum título ativo | ver os títulos com `&list=1` e ajustar as palavras |
-| `O YouTube bloqueou o pedido` (503) | IP do servidor marcado pelo YouTube | não atribuir canais do YouTube a esse servidor |
+| `Sign in to confirm you're not a bot` na linha do yt-dlp | IP do servidor marcado pelo YouTube | instalar cookies com `ytlive-cookies` (ver [Erro "not a bot"](#erro-sign-in-to-confirm-youre-not-a-bot--cookies)) |
+| o erro "not a bot" voltou, com `com cookies, instaladas há N dia(s)` | as cookies expiraram | exportar outra vez e correr `ytlive-cookies` |
+| `ERRO: as cookies não têm sessão iniciada` | exportadas sem login, ou da janela errada | entrar na conta na janela privada antes de exportar |
+| `ERRO: ... formato Netscape` | exportadas em JSON ou de outro site | exportar em `youtube.com`, formato Netscape |
+| `O YouTube bloqueou o pedido` (503) | IP do servidor marcado pelo YouTube | instalar cookies; se não chegar, não atribuir canais do YouTube a esse servidor |
 | `Playback on other websites has been disabled` | o dono bloqueou a reprodução fora do YouTube | já resolvido pelo script (yt-dlp com clientes web) |
 | `[LLOD] Source isn't MPEG-TS` nos logs do XUI | LLOD ligado no canal | desligar o LLOD nesse canal |
 | o XUI reinicia o stream a cada 2 s | erro do ffmpeg ao abrir a fonte | ver `/home/xui/content/streams/<ID>.errors` |
@@ -166,6 +171,7 @@ journalctl -u ytlive -n 50 --no-pager         # últimos registos
 systemctl restart ytlive                      # reiniciar
 rm -rf /tmp/ytlive_cache                      # limpar a cache de links
 yt-dlp -U                                     # atualizar o yt-dlp à mão
+ytlive-cookies --estado                       # há cookies? há quantos dias?
 
 # erros de um stream no XUI (troca <ID> pelo ID do stream)
 tail -20 /home/xui/content/streams/<ID>.errors
