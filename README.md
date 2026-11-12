@@ -175,7 +175,7 @@ a esperar   v=guvwk0S17w4 (falhou há pouco)
 
 - **pronta**: o link é válido e responde.
 - **renovada**: foi buscar um link novo agora.
-- **falhou** / **a esperar**: o canal está offline ou o YouTube recusou; tenta outra vez 15 minutos depois.
+- **falhou** / **a esperar**: o canal está offline ou o YouTube recusou. Tenta outra vez cada vez mais tarde (15 min, 30, 1 h, depois de 2 em 2 h), para não gastar pedidos nem as cookies com um canal que não está em direto. Quando alguém abre o canal, o script tenta sempre na hora.
 - **esquecida**: o canal não foi usado nos últimos 7 dias e deixa de ser renovado (volta a ser registado quando alguém o abrir).
 
 **Não é preciso configurar nada por canal.** Cada canal do YouTube regista-se sozinho na primeira vez que o XUI o usa. Para cada canal novo basta garantir o que está em [Criar o canal no XUI](#3-criar-o-canal-no-xui): atribuído a um servidor com o script (e as cookies, se esse servidor precisar delas), com LLOD e Direct Source desligados.
@@ -185,6 +185,8 @@ A única diferença é o primeiro arranque: em On-Demand, um canal novo ainda po
 ```bash
 curl -s "http://127.0.0.1:8088/ytlive.php?c=ID_DO_CANAL&t=PALAVRAS&p=1" | head -3
 ```
+
+**Cuidado com as cookies.** A verificação de 5 em 5 minutos só pergunta ao servidor de vídeo se o link ainda responde, sem usar as cookies. O yt-dlp (com as cookies) só corre quando é preciso um link novo: cerca de 4 a 5 vezes por dia por canal em direto. Também corre **um de cada vez**, para dois processos não escreverem ao mesmo tempo no ficheiro das cookies, o que podia estragar a sessão.
 
 O script também se lembra do método que funciona neste servidor. Se o último foi o yt-dlp, passa a ser tentado logo a seguir à página web, sem perder tempo com as APIs.
 

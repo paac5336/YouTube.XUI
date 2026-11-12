@@ -193,6 +193,17 @@ function cookies_info(): string {
     return "com cookies, instaladas há $dias dia(s)";
 }
 
+// --- Corre o yt-dlp um de cada vez: todos usam o mesmo ficheiro de cookies, que o yt-dlp reescreve.
+//     Duas escritas ao mesmo tempo podiam perder a renovação das cookies e estragar a sessão.
+//     {COOKIES} no comando é trocado pela opção --cookies já dentro do bloqueio. ---
+function run_ytdlp(string $cmd, string $home): string {
+    $lock = @fopen(CACHE_DIR . '/ytdlp.lock', 'c');
+    if ($lock) flock($lock, LOCK_EX);
+    $out = (string)shell_exec(str_replace('{COOKIES}', ytdlp_cookies($home), $cmd));
+    if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    return $out;
+}
+
 // --- Método 4: yt-dlp ---
 function ytdlp(string $videoId, string &$err): ?string {
     if (!is_executable(YTDLP)) { $err = 'yt-dlp não instalado'; return null; }
@@ -201,7 +212,6 @@ function ytdlp(string $videoId, string &$err): ?string {
     if (!is_dir($home)) @mkdir($home, 0700, true);
     $env = 'HOME=' . escapeshellarg($home) . ' DENO_DIR=' . escapeshellarg("$home/deno")
          . ' PATH=/usr/local/bin:/usr/bin:/bin ';
-    $cookies = ytdlp_cookies($home);
     $url = escapeshellarg("https://www.youtube.com/watch?v=$videoId");
     // 1º: clientes web (funcionam mesmo com a reprodução fora do YouTube desativada); 2º: padrão do yt-dlp
     $tries = [
@@ -210,8 +220,8 @@ function ytdlp(string $videoId, string &$err): ?string {
     ];
     $errs = [];
     foreach ($tries as $extra) {
-        $cmd = $env . 'timeout 60 ' . escapeshellarg(YTDLP) . " -g --no-warnings --no-cache-dir --no-playlist $cookies$extra $url 2>&1";
-        $out = (string)shell_exec($cmd);
+        $cmd = $env . 'timeout 60 ' . escapeshellarg(YTDLP) . " -g --no-warnings --no-cache-dir --no-playlist {COOKIES}$extra $url 2>&1";
+        $out = run_ytdlp($cmd, $home);
         foreach (preg_split('/\R/', trim($out)) as $line) {
             if (is_hls(trim($line))) return trim($line);
         }
@@ -279,10 +289,10 @@ function list_lives(string $channelBase, array &$log): array {
         $home = CACHE_DIR . '/home';
         if (!is_dir($home)) @mkdir($home, 0700, true);
         $cmd = 'HOME=' . escapeshellarg($home) . ' DENO_DIR=' . escapeshellarg("$home/deno") . ' PATH=/usr/local/bin:/usr/bin:/bin '
-             . 'timeout 60 ' . escapeshellarg(YTDLP) . ' --flat-playlist --playlist-end 30 --no-warnings --no-cache-dir ' . ytdlp_cookies($home)
+             . 'timeout 60 ' . escapeshellarg(YTDLP) . ' --flat-playlist --playlist-end 30 --no-warnings --no-cache-dir {COOKIES}'
              . '--print ' . escapeshellarg('%(id)s|%(live_status)s|%(title)s') . ' '
              . escapeshellarg($channelBase . '/streams') . ' 2>/dev/null';
-        foreach (preg_split('/\R/', trim((string)shell_exec($cmd))) as $line) {
+        foreach (preg_split('/\R/', trim(run_ytdlp($cmd, $home))) as $line) {
             $p = explode('|', $line, 3);
             if (count($p) === 3 && $p[1] === 'is_live' && preg_match('/^[A-Za-z0-9_-]{11}$/', $p[0])) {
                 $lives[] = ['id' => $p[0], 'title' => $p[2]];
@@ -323,11 +333,18 @@ if (isset($_GET['aquecer'])) {
             if ($code === 200) { echo "pronta      {$r['q']} (até " . date('H:i', $c0['expires']) . ")\n"; continue; }
             @unlink($cf);                                               // o direto mudou ou terminou
         }
+        // canal offline ou recusado: esperar cada vez mais antes de tentar outra vez (15 min, 30, 1 h, máx. 2 h),
+        // para não gastar pedidos (e as cookies) com um canal que não está em direto
         $ff = CACHE_DIR . "/$key.fail";
-        if (is_file($ff) && time() - filemtime($ff) < 900) { echo "a esperar   {$r['q']} (falhou há pouco)\n"; continue; }
+        $fails = is_file($ff) ? max(1, (int)@file_get_contents($ff)) : 0;
+        if ($fails) {
+            $wait = min(900 * 2 ** ($fails - 1), 7200);
+            $left = $wait - (time() - filemtime($ff));
+            if ($left > 0) { echo "a esperar   {$r['q']} (falhou $fails vez(es), nova tentativa em " . ceil($left / 60) . " min)\n"; continue; }
+        }
         [$code, $body] = get_url("http://127.0.0.1:$port/ytlive.php?{$r['q']}&renovar=1", 300);
         if ($code === 200) { @unlink($ff); echo "renovada    {$r['q']}\n"; }
-        else { @touch($ff); echo "falhou      {$r['q']}: " . strtok(trim($body) . "\n", "\n") . "\n"; }
+        else { @file_put_contents($ff, $fails + 1); echo "falhou      {$r['q']}: " . strtok(trim($body) . "\n", "\n") . "\n"; }
     }
     exit;
 }
