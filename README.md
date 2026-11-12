@@ -178,7 +178,9 @@ a esperar   v=guvwk0S17w4 (falhou há pouco)
 - **falhou** / **a esperar**: o canal está offline ou o YouTube recusou; tenta outra vez 15 minutos depois.
 - **esquecida**: o canal não foi usado nos últimos 7 dias e deixa de ser renovado (volta a ser registado quando alguém o abrir).
 
-Um canal novo só fica registado depois da primeira utilização. Para não esperares por isso, regista-o logo com um pedido igual ao do XUI:
+**Não é preciso configurar nada por canal.** Cada canal do YouTube regista-se sozinho na primeira vez que o XUI o usa. Para cada canal novo basta garantir o que está em [Criar o canal no XUI](#3-criar-o-canal-no-xui): atribuído a um servidor com o script (e as cookies, se esse servidor precisar delas), com LLOD e Direct Source desligados.
+
+A única diferença é o primeiro arranque: em On-Demand, um canal novo ainda pode falhar uma vez, enquanto o link é obtido pela primeira vez. Para evitar isso, regista-o logo com um pedido igual ao do XUI:
 
 ```bash
 curl -s "http://127.0.0.1:8088/ytlive.php?c=ID_DO_CANAL&t=PALAVRAS&p=1" | head -3
