@@ -24,6 +24,7 @@ desde que o script esteja instalado **no servidor que puxa o canal** e o **LLOD 
 2. O script procura o direto ativo do canal e tenta obter o link `.m3u8` por esta ordem: página web → API como app de iPhone → API como Android VR → yt-dlp.
 3. O link fica em cache até 10 minutos antes de expirar (no máximo 3 h).
 4. Com `&p=1`, o script devolve a lista `.m3u8` ao XUI; o ffmpeg do XUI lê os segmentos diretamente do YouTube.
+5. De 5 em 5 minutos, o cron renova os links dos canais usados nos últimos 7 dias, para estarem sempre prontos (ver [Cache quente](#cache-quente-on-demand)).
 
 O link do YouTube leva o IP do servidor que o pediu, por isso **o script tem de estar no mesmo servidor que puxa o canal** (main ou LB). Instala-o em todos os servidores a que atribuis canais do YouTube.
 
@@ -48,6 +49,7 @@ O instalador põe:
 - o comando **`ytlive-cookies`**, para instalar as cookies do YouTube (ver mais abaixo)
 - o script em `/opt/ytlive/ytlive.php`
 - o serviço `ytlive` na porta interna `127.0.0.1:8088`, com 4 pedidos em simultâneo e arranque automático
+- o cron que mantém os links prontos de 5 em 5 minutos (`/etc/cron.d/ytlive-aquecer`)
 
 Pode correr-se outra vez para atualizar; as cookies instaladas mantêm-se. Funciona em Ubuntu 20.04 e 22.04.
 
@@ -84,7 +86,7 @@ Em **Streams → Add Stream**:
 | Servidor | um servidor onde o script está instalado |
 | Direct Source | **desligado** |
 | Low Latency On-Demand (LLOD) | **desligado** |
-| On-Demand | opcional (desligado arranca mais depressa) |
+| On-Demand | pode ligar: o link fica sempre pronto e o canal arranca logo (ver [Cache quente](#cache-quente-on-demand)) |
 
 `ID_DO_CANAL` pode ser o ID `UCxxxxxxxxxxxxxxxxxxxxxx` ou o `@handle`.
 
@@ -145,10 +147,44 @@ Exemplo testado: Pai Natal 24h → `c=UCHdUmP7lMXJE9aUAtFQbJOg`
 | `O YouTube bloqueou o pedido` (503) | IP do servidor marcado pelo YouTube | instalar cookies; se não chegar, não atribuir canais do YouTube a esse servidor |
 | `Playback on other websites has been disabled` | o dono bloqueou a reprodução fora do YouTube | já resolvido pelo script (yt-dlp com clientes web) |
 | `[LLOD] Source isn't MPEG-TS` nos logs do XUI | LLOD ligado no canal | desligar o LLOD nesse canal |
+| em On-Demand, o canal falha no primeiro arranque | o link ainda não estava pronto | ver se a fonte aparece em `?aquecer=1`; se não, registá-la (ver [Cache quente](#cache-quente-on-demand)) |
 | o XUI reinicia o stream a cada 2 s | erro do ffmpeg ao abrir a fonte | ver `/home/xui/content/streams/<ID>.errors` |
 | `XUI.one - Please run as XUI user` | ffmpeg/ffprobe do XUI corrido como root | usar `sudo -u xui ...` |
 | acentos estranhos (`v▒deo`) no PuTTY | terminal sem UTF-8 | PuTTY: Window → Translation → UTF-8 |
 | `?php: No such file or directory` | ficheiros trocados ao copiar | `head -1`: o instalador começa por `#!/bin/bash` |
+
+## Cache quente (On-Demand)
+
+Obter um link novo do YouTube demora 10 a 30 segundos (procurar o direto, yt-dlp). Em On-Demand, isso fazia o primeiro arranque falhar. Por isso:
+
+- cada fonte que o XUI usa (`&p=1`) fica registada em `/opt/ytlive/fontes/`;
+- de 5 em 5 minutos, o cron renova o link das fontes usadas nos últimos 7 dias quando falta menos de 30 minutos para expirar, ou quando o direto mudou ou terminou;
+- quando alguém abre o canal, o link já está pronto e o arranque é imediato.
+
+Ver o estado (corre também uma renovação):
+
+```bash
+curl "http://127.0.0.1:8088/ytlive.php?aquecer=1"
+```
+
+```
+pronta      c=UCNrGOnduIS9BXIRmDcHasZA&t=Christmas (até 21:40)
+renovada    c=@NomeDoCanal
+a esperar   v=guvwk0S17w4 (falhou há pouco)
+```
+
+- **pronta**: o link é válido e responde.
+- **renovada**: foi buscar um link novo agora.
+- **falhou** / **a esperar**: o canal está offline ou o YouTube recusou; tenta outra vez 15 minutos depois.
+- **esquecida**: o canal não foi usado nos últimos 7 dias e deixa de ser renovado (volta a ser registado quando alguém o abrir).
+
+Um canal novo só fica registado depois da primeira utilização. Para não esperares por isso, regista-o logo com um pedido igual ao do XUI:
+
+```bash
+curl -s "http://127.0.0.1:8088/ytlive.php?c=ID_DO_CANAL&t=PALAVRAS&p=1" | head -3
+```
+
+O script também se lembra do método que funciona neste servidor. Se o último foi o yt-dlp, passa a ser tentado logo a seguir à página web, sem perder tempo com as APIs.
 
 ## Atualizar só o script
 
@@ -193,6 +229,8 @@ O servidor pode ser reiniciado: o serviço arranca sozinho. A cache em `/tmp` é
 | `/etc/cron.d/ytlive-ytdlp` | atualização diária do yt-dlp |
 | `/usr/local/bin/ytlive-cookies` | comando para instalar as cookies |
 | `/opt/ytlive/cookies.txt` | cookies do YouTube (se instaladas) |
+| `/opt/ytlive/fontes/` | fontes usadas pelo XUI (para a cache quente) |
+| `/etc/cron.d/ytlive-aquecer` | renovação dos links de 5 em 5 minutos |
 | `/tmp/ytlive_cache/` | cache de links |
 
 ## Erro "Sign in to confirm you're not a bot" — cookies
@@ -235,7 +273,7 @@ As cookies costumam durar semanas a meses (o yt-dlp vai-as renovando). Quando o 
 
 ```bash
 systemctl disable --now ytlive
-rm -f /etc/systemd/system/ytlive.service /etc/cron.d/ytlive-ytdlp /usr/local/bin/ytlive-cookies
+rm -f /etc/systemd/system/ytlive.service /etc/cron.d/ytlive-ytdlp /etc/cron.d/ytlive-aquecer /usr/local/bin/ytlive-cookies
 systemctl daemon-reload
 rm -rf /opt/ytlive /tmp/ytlive_cache
 # opcional: rm -f /usr/local/bin/yt-dlp /usr/local/bin/deno

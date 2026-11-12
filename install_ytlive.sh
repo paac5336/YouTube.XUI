@@ -62,6 +62,12 @@ cat > "$DIR/ytlive.php" <<'PHPEOF'
  *   2. API interna do YouTube como app de iPhone (IOS)
  *   3. API interna do YouTube como app Android VR
  *   4. yt-dlp (se estiver instalado em /usr/local/bin/yt-dlp)
+ *   (se o yt-dlp foi o último a funcionar, passa a ser tentado logo a seguir à página web)
+ *
+ * Cache quente (para o On-Demand arrancar logo):
+ *   as fontes usadas pelo XUI ficam registadas em /opt/ytlive/fontes; o cron chama ?aquecer=1
+ *   de 5 em 5 min e renova os links antes de expirarem. Ver o estado:
+ *               curl "http://127.0.0.1:8088/ytlive.php?aquecer=1"
  *      Se o YouTube pedir "Sign in to confirm you're not a bot", exporta as cookies de uma conta
  *      para /root/cookies.txt e corre:  ytlive-cookies   (ver o README)
  */
@@ -74,6 +80,9 @@ const CACHE_FALLBACK = 3 * 3600;      // validade se o link não indicar expira�
 const HTTP_TIMEOUT   = 15;            // segundos
 const YTDLP          = '/usr/local/bin/yt-dlp';
 const COOKIES        = '/opt/ytlive/cookies.txt';  // opcional: cookies do YouTube (formato Netscape) para o yt-dlp
+const FONTES_DIR     = '/opt/ytlive/fontes';  // fontes usadas pelo XUI (para manter os links prontos)
+const AQUECER_DIAS   = 7;             // manter prontos os links das fontes usadas nos últimos 7 dias
+const AQUECER_ANTES  = 1800;          // renovar o link quando faltar menos de 30 min para expirar
 const WEB_UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                      . '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 // ========================================================
@@ -98,6 +107,26 @@ function http(string $url, string $method = 'GET', array $headers = [], ?string 
     if ($body !== null) $opts['http']['content'] = $body;
     $r = @file_get_contents($url, false, stream_context_create($opts));
     return ($r === false || $r === '') ? null : $r;
+}
+
+// --- GET simples que devolve [código HTTP, corpo] ---
+function get_url(string $u, int $timeout): array {
+    $r = @file_get_contents($u, false, stream_context_create(['http' => [
+        'timeout' => $timeout, 'ignore_errors' => true, 'header' => 'User-Agent: ' . WEB_UA,
+    ]]));
+    $code = 0;
+    foreach ($http_response_header ?? [] as $h) {
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) $code = (int)$m[1];   // último = resposta final
+    }
+    return [$code, $r === false ? '' : $r];
+}
+
+// --- Regista que o XUI usa esta fonte, para o aquecimento (?aquecer=1) manter o link pronto ---
+function register_use(string $key, array $req): void {
+    $f = FONTES_DIR . "/$key.json";
+    if (is_file($f) && time() - filemtime($f) < 300) return;          // no máximo 1 escrita a cada 5 min
+    if (!is_dir(FONTES_DIR)) @mkdir(FONTES_DIR, 0755, true);
+    @file_put_contents($f, json_encode(['q' => http_build_query($req), 'used' => time()]), LOCK_EX);
 }
 
 function clean_url(string $u): string {
@@ -270,7 +299,38 @@ if (ONLY_LOCALHOST) {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
     if (!in_array($ip, ['127.0.0.1', '::1'], true)) fail(403, 'Acesso negado.');
 }
-$debug = isset($_GET['debug']);
+$debug = isset($_GET['debug']) || isset($_GET['renovar']);   // renovar = como debug (usado pelo aquecimento)
+
+// ---- ?aquecer=1: renova os links das fontes usadas, para o On-Demand arrancar logo (corre pelo cron) ----
+if (isset($_GET['aquecer'])) {
+    header('Content-Type: text/plain; charset=utf-8');
+    @set_time_limit(0);
+    if (!is_dir(CACHE_DIR)) @mkdir(CACHE_DIR, 0700, true);
+    $port = (int)($_SERVER['SERVER_PORT'] ?? 8088);
+    $list = glob(FONTES_DIR . '/*.json') ?: [];
+    if (!$list) echo "Nenhuma fonte registada. As fontes ficam registadas quando o XUI as usa (&p=1).\n";
+    foreach ($list as $f) {
+        $key = basename($f, '.json');
+        $r = json_decode((string)@file_get_contents($f), true);
+        if (!is_array($r) || empty($r['q'])) { @unlink($f); continue; }
+        if (time() - ($r['used'] ?? 0) > AQUECER_DIAS * 86400) {
+            @unlink($f); echo "esquecida   {$r['q']} (sem uso há mais de " . AQUECER_DIAS . " dias)\n"; continue;
+        }
+        $cf = CACHE_DIR . "/$key.json";
+        $c0 = readCache($cf);
+        if ($c0 && $c0['expires'] - time() > AQUECER_ANTES) {
+            [$code] = get_url($c0['url'], 10);                         // o link ainda responde?
+            if ($code === 200) { echo "pronta      {$r['q']} (até " . date('H:i', $c0['expires']) . ")\n"; continue; }
+            @unlink($cf);                                               // o direto mudou ou terminou
+        }
+        $ff = CACHE_DIR . "/$key.fail";
+        if (is_file($ff) && time() - filemtime($ff) < 900) { echo "a esperar   {$r['q']} (falhou há pouco)\n"; continue; }
+        [$code, $body] = get_url("http://127.0.0.1:$port/ytlive.php?{$r['q']}&renovar=1", 300);
+        if ($code === 200) { @unlink($ff); echo "renovada    {$r['q']}\n"; }
+        else { @touch($ff); echo "falhou      {$r['q']}: " . strtok(trim($body) . "\n", "\n") . "\n"; }
+    }
+    exit;
+}
 
 $v = trim($_GET['v'] ?? '');
 $c = trim($_GET['c'] ?? '');
@@ -291,6 +351,8 @@ if ($v !== '') {
 } else {
     fail(400, 'Falta o parâmetro ?v=ID_DO_VIDEO ou ?c=@canal');
 }
+$req = $v !== '' ? ['v' => $v] : (['c' => $c] + ($t !== '' ? ['t' => $t] : []));   // para o registo de fontes
+$safeKey = preg_replace('/[^a-z0-9_.-]/i', '_', $cacheKey);
 
 // ---- &list=1: mostrar os diretos ativos do canal ----
 if (isset($_GET['list'])) {
@@ -310,7 +372,7 @@ if (isset($_GET['list'])) {
 
 // ---- cache ----
 if (!is_dir(CACHE_DIR)) @mkdir(CACHE_DIR, 0700, true);
-$cacheFile = CACHE_DIR . '/' . preg_replace('/[^a-z0-9_.-]/i', '_', $cacheKey) . '.json';
+$cacheFile = CACHE_DIR . '/' . $safeKey . '.json';
 function readCache(string $f): ?array {
     if (!is_file($f)) return null;
     $d = json_decode((string)@file_get_contents($f), true);
@@ -377,20 +439,21 @@ if (!$cached) {
         }
         if (!$m3u8) $log[] = 'página web: sem hlsManifestUrl' . ($isLive ? ' (mas isLive=true)' : '');
 
-        // ---- 2 e 3. API interna ----
-        foreach (['IOS', 'ANDROID_VR'] as $cl) {
+        // ---- 2, 3 e 4. API interna (IOS, ANDROID_VR) e yt-dlp ----
+        // se o yt-dlp foi o último método a funcionar neste servidor, é tentado primeiro (arranque mais rápido)
+        $order = ['IOS', 'ANDROID_VR', 'yt-dlp'];
+        $pref = json_decode((string)@file_get_contents(CACHE_DIR . '/metodo.json'), true);
+        if (($pref['m'] ?? '') === 'yt-dlp' && time() - ($pref['t'] ?? 0) < 86400) $order = ['yt-dlp', 'IOS', 'ANDROID_VR'];
+        foreach ($order as $mt) {
             if ($m3u8) break;
-            $u = innertube($videoId, $cl);
-            if ($u) { $m3u8 = $u; $method = "API $cl"; }
-            else $log[] = "API $cl: sem link";
-        }
-
-        // ---- 4. yt-dlp ----
-        if (!$m3u8) {
-            $err = '';
-            $u = ytdlp($videoId, $err);
-            if ($u) { $m3u8 = $u; $method = 'yt-dlp'; }
-            else $log[] = $err;
+            if ($mt === 'yt-dlp') {
+                $err = '';
+                $u = ytdlp($videoId, $err);
+                if ($u) { $m3u8 = $u; $method = 'yt-dlp'; } else $log[] = $err;
+            } else {
+                $u = innertube($videoId, $mt);
+                if ($u) { $m3u8 = $u; $method = "API $mt"; } else $log[] = "API $mt: sem link";
+            }
         }
 
         if (!$m3u8) {
@@ -399,6 +462,7 @@ if (!$cached) {
             fail(502, 'O direto existe, mas não foi possível obter o link HLS.', $log);
         }
 
+        @file_put_contents(CACHE_DIR . '/metodo.json', json_encode(['m' => $method === 'yt-dlp' ? 'yt-dlp' : 'outro', 't' => time()]));
         $expires = time() + CACHE_FALLBACK;
         if (preg_match('#/expire/(\d{9,11})/#', $m3u8, $e) || preg_match('#[?&]expire=(\d{9,11})#', $m3u8, $e)) {
             $expires = min($expires, (int)$e[1] - CACHE_MARGIN);
@@ -421,6 +485,9 @@ if ($debug) {
     if (!empty($cached['log'])) echo "\nTentativas falhadas antes:\n  - " . implode("\n  - ", $cached['log']) . "\n";
     exit;
 }
+
+// ---- o XUI está a usar esta fonte: registar para o aquecimento ----
+register_use($safeKey, $req);
 
 // ---- Modo proxy (&p=1): entrega a lista .m3u8 diretamente, sem redirecionamento ----
 if (isset($_GET['p'])) {
@@ -454,6 +521,7 @@ header('Cache-Control: no-store');
 header('Location: ' . $cached['url'], true, 302);
 exit;
 PHPEOF
+mkdir -p "$DIR/fontes"
 chown -R www-data:www-data "$DIR"
 chmod 644 "$DIR/ytlive.php"
 php -l "$DIR/ytlive.php"
@@ -556,6 +624,8 @@ systemctl daemon-reload
 systemctl enable ytlive >/dev/null 2>&1
 rm -rf /tmp/ytlive_cache
 systemctl restart ytlive
+# manter os links prontos (On-Demand): renovar as fontes usadas, de 5 em 5 minutos
+echo "*/5 * * * * www-data flock -n /tmp/ytlive_aquecer.lock curl -s --max-time 1500 \"http://127.0.0.1:$PORT/ytlive.php?aquecer=1\" >/dev/null 2>&1" > /etc/cron.d/ytlive-aquecer
 sleep 2
 
 echo "==> 6/6 A testar..."
